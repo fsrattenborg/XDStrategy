@@ -6,6 +6,10 @@
 # Remember to update the location of XDConstraints if this is to be used
 # directly through this script.
 # 
+# Latest changes:
+# - Added version number :D
+# - Moved path to XDConstraints for easy access
+# 
 # Todo (not a prioritised list):
 # - Set *model correctly (-1 (or -2?) for IAM)
 # - Incorporate refining κ on either core or valence
@@ -31,6 +35,7 @@ from glob import glob
 from pathlib import Path
 from collections import defaultdict
 
+__version__ = 'v0.0.2, 16.12.2025'
 
 standard = [
 '# Instructions for masterfiles',
@@ -55,6 +60,9 @@ standard = [
 'SCALE CC M D Q O[!H] H[!H] XYZ U2 KAPPA',
 'SCALE CC SIGOBS[0] M D Q O[!H] H[!H] XYZ U2 KAPPA'
 ]
+
+# Path to XDConstraints script (by Lennard Krause)
+XDCon_path = r''
 
 ## Patterns
 atom_table_regex = re.compile(r'(?P<ATOM>[a-zA-Z\(\)0-9]+)\s+(?P<ATOM0>[a-zA-Z\(\)0-9]+)\s+(?P<AX1>[XYZxyz])\s+(?P<ATOM1>[a-zA-Z\(\)0-9]+)\s+(?P<ATOM2>[a-zA-Z\(\)0-9]+)\s+(?P<AX2>[XYZxyz])\s+(?P<RL>[RLrl])\s+(?P<TP>\d)\s+(?P<TBL>\d+)\s+(?P<KAP>\d+)\s+(?P<LMX>\d)\s+(?P<SITESYM>[0-9a-zA-Z_]*){0,1}(\s+(?P<CHEMCON>.*)\s*)*\n')
@@ -138,12 +146,11 @@ def get_files():
                     print('Skipped loading constraints.')
                     break
 
-
-    elif Consts.upper() == 'W' and Path(r'c:\DivScripts\LKScripts\XDConstraints.py').exists():
+    elif Consts.upper() == 'W' and Path(XDCon_path).exists():
         existing_cons = glob(r'*.con') + glob(r'*.const')
         print(f'Running XDConstraints on {oMasName} to write constraints file.')
         XDCon = run(
-                ['python', r'c:\DivScripts\LKScripts\XDConstraints.py'],
+                ['python', XDCon_path],
                 input=oMasName,
                 text=True,
                 capture_output=True
@@ -159,10 +166,16 @@ def get_files():
         XDConOut = Path('XDConstraints.out')
         XDConOut.write_text(XDCon.stdout)
 
-    elif Consts.upper() == 'W':
+    elif Consts.upper() == 'W' and XDCon_path:
         print('Failed to locate and run XDConstraints.')
-        print('Please ensure XDConstraints is in the same folder as XDStrategy (or path is given in script).')
+        print('Please ensure path to XDConstraints are correctly set (XDCon_path).')
         print('Alternatively run XDConstraints and add constraints manually.')
+        print('Continuing with no constraint files.')
+        const_files = []
+
+    elif Consts.upper() == 'W':
+        print('Please set the path to XDConstraints (XDCon_path).')
+        print('Continuing with no constraint files.')
         const_files = []
 
     else:
@@ -622,7 +635,7 @@ def write_masterfile(masterfile:list, atomdict:dict, dummyatoms:list, cons:list,
 
 def main():
     """
-    Main function :)
+    Main function :))
     """
     # Getting files
     mas, inst, cons = get_files()
