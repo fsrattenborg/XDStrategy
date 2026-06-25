@@ -9,6 +9,9 @@
 # Latest changes:
 # - Added version number :D
 # - Moved path to XDConstraints for easy access
+# - Now updates TP values for individual atoms
+# - Now also reads symmetry restrictions on XYZ and U's if they are present
+#     in the original master file (e.g. from XDINI)
 # 
 # Todo (not a prioritised list):
 # - Set *model correctly (-1 (or -2?) for IAM)
@@ -35,7 +38,7 @@ from glob import glob
 from pathlib import Path
 from collections import defaultdict
 
-__version__ = 'v0.0.2, 16.12.2025'
+__version__ = 'v0.0.3, 25.06.2026'
 
 standard = [
 '# Instructions for masterfiles',
@@ -48,14 +51,14 @@ standard = [
 '# Possible instructions (WIP):',
 '# XYZ, HXYZ, U1, U2, U3, U4, HU1, M, D, Q, O, H, CC,',
 '# SCALE, SINTHL, SIGOBS, KAPPA, KAPPAP, CON',
-'SCALE CON'
-'SCALE CON XYZ U2 SINTHL[0.6;2.]'
-'SCALE CON KAPPA M'
-'SCALE CON KAPPA M D'
-'SCALE CON KAPPA M D Q'
-'SCALE CON KAPPA M D Q O'
-'SCALE CON KAPPA M D Q O H'
-'SCALE CON KAPPA M D Q O H XYZ U2'
+'SCALE'
+'SCALE XYZ U2 SINTHL[0.6;2.]'
+'SCALE KAPPA M'
+'SCALE KAPPA M D'
+'SCALE KAPPA M D Q'
+'SCALE KAPPA M D Q O'
+'SCALE KAPPA M D Q O H'
+'SCALE KAPPA M D Q O H XYZ U2'
 ]
 
 # Path to XDConstraints script (by Lennard Krause)
@@ -81,8 +84,8 @@ def get_files():
     # Masterfile
     while True:
         master_input = input('Enter name of source XD master file [xd.mas]: ') or 'xd.mas'
+        oMasName = master_input.split('.')[0] + '.mas'
         try:
-            oMasName = master_input.split('.')[0] + '.mas'
             with open(oMasName, 'r') as ifile:
                 oMas = ifile.readlines()
             break
@@ -130,15 +133,13 @@ def get_files():
                 const_files_input = input('Input constraint file(s). Separate files with space: ')
                 if const_files_input:
                     files = [file for file in const_files_input.split(' ') if file]
-
-                    try:
-                        for file in files:
+                    for file in files:
+                        try:
                             with open(file, 'r'):
                                 const_files.append(file)
                                 print(f'{file} loaded.')
-                        break
-                    except FileNotFoundError:
-                        print(f'{file} not found.')
+                            break
+                        except FileNotFoundError: print(f'{file} not found.')
                 else:
                     print('Skipped loading constraints.')
                     break
@@ -211,7 +212,11 @@ class Atom():
 
     def key_table(self):
         xyz = '000'
-        U = ' 000000 0000000000 000000000000000'
+        Us = {'U2': '000000',
+              'U3': '0000000000',
+              'U4': '000000000000000'
+              }
+
         MMs = {'M': '00',
                'D': '000',
                'Q': '00000',
@@ -223,14 +228,13 @@ class Atom():
         instructions = [ins if ins not in ['HXYZ', 'HU1'] else ins[1:] for ins in self.instruction]
 
         # Position
-        if 'XYZ' in instructions: xyz = '111'
+        if 'XYZ' in instructions: xyz = self.xyz
 
         # Thermal parameters
-        if 'U1' in instructions: U = re.sub(' 0', ' 1', U, count = 1)
-        if 'U2' in instructions: U = re.sub(' 000000 ', ' 111111 ', U, count = 1)
-        if 'U3' in instructions: U = re.sub(' 0000000000 ', ' 1111111111 ', U)
-        if 'U4' in instructions: U = re.sub(' 000000000000000', ' 111111111111111', U)
-        # print(f'U: {U}')
+        if 'U1' in instructions: Us['U2'] = '111000'
+        if 'U2' in instructions: Us['U2'] = self.Ucons['U2']
+        if 'U3' in instructions: Us['U3'] = self.Ucons['U3']
+        if 'U4' in instructions: Us['U4'] = self.Ucons['U4']
 
         # Multipoles
         if 'M' in instructions: MMs['M'] = self.MPs['M']
@@ -240,11 +244,21 @@ class Atom():
         if 'H' in instructions: MMs['H'] = self.MPs['H']
 
         Multipoles = ' '.join(str(mp) for mp in MMs.values())
+        U = ' '.join(str(Ux) for Ux in Us.values())
         self.instruction = []
-        return f'{self.atom:8}{xyz}{U} {Multipoles}'
+        return f'{self.atom:8}{xyz} {U} {Multipoles}'
 
     def set_pseudosymm(self, MPs):
         self.MPs = MPs
+
+    def set_xyz(self, xyz):
+        self.xyz = xyz
+
+    def set_U_cons(self, Ucons):
+        self.Ucons = Ucons
+
+    def update_TP(self, TP):
+        self.tp = str(max(TP, int(self.tp)))
 
 def clean_mas(masterfile):
     masterfile = deepcopy(masterfile)
@@ -292,6 +306,8 @@ def get_atoms(masterfile):
     scatdict = {}
     dummyatoms = []
     type_counter = 1
+    maxU = 2  # Starting value
+
     for line in masterfile:
 
 ## Scat table (to get atom type)
@@ -310,6 +326,7 @@ def get_atoms(masterfile):
             atom = atom_table_regex.match(line).groupdict()
             if atom['CHEMCON'] == None: atom['CHEMCON'] = ''
             atomdict[atom['ATOM']] = Atom(*atom.items())
+            maxU = max(maxU, int(atom['TP']))
 
         if dum_regex.search(line):
             dummyatoms.append(line)
@@ -317,6 +334,14 @@ def get_atoms(masterfile):
 ## Key table (get MP pseudo symmetry)
         if key_table_regex.search(line):
             keys = key_table_regex.match(line).groupdict()
+            print(keys)
+            xyz = keys.get('XYZ')
+            atomdict[keys['ATOM']].set_xyz(xyz)
+
+            Ucons = {}
+            for Ux in ['U2', 'U3', 'U4']: Ucons[Ux] = keys.get(Ux)
+            atomdict[keys['ATOM']].set_U_cons(Ucons)
+
             MPs = {}
             for mp in ['M', 'D', 'Q', 'O', 'H']: MPs[mp] = keys.get(mp)
             atomdict[keys['ATOM']].set_pseudosymm(MPs)
@@ -331,7 +356,7 @@ def get_atoms(masterfile):
                 atom.element = elemtype[0]
                 break
 
-    return atomdict, dummyatoms
+    return atomdict, dummyatoms, maxU
 
 def get_instructions(line):
     dictionary = {}
@@ -416,11 +441,13 @@ def instruct_atoms(inst_line, atomdict, maxU = 0):
             if '!' + atom.atom in inst or '!' + atom.element in inst: continue
 
             if (
-                atom.atom in inst or atom.element in inst  # Element specified in instruction
+                atom.atom in inst or atom.element in inst  # Atom/element specified in instruction
                 or all(s.startswith('!') for s in inst)    # All entries are negative (but not current element)
                 or inst == ['A']                           # Instruction marked for all elements
             ):
                 atom.instruction.append(ins)
+                # Ensure correct TP-value in ATOM table
+                if re.match(r'U[2-4]', ins): atom.update_TP(int(ins[1:]))
 
     return False, other_ins, maxU
 
@@ -547,12 +574,12 @@ def write_masterfile(masterfile:list, atomdict:dict, dummyatoms:list, cons:list,
         otherins (dict): Dictionary of non-atom specific instructions
     """
     ## Prepping
-    number = f'{number:02}'
+    instnr = f'{number:02}'
     scales, type_kappas = get_other_values(masterfile)
     cleanmas = clean_mas(masterfile)
 
     ## Writing
-    with open(f'xd{number}.mas', 'w') as new_master:
+    with open(f'xd{instnr}.mas', 'w') as new_master:
         for i, line in enumerate(cleanmas):
             # End of XDLSM -> Leave the rest of xd.mas untouched
             if line == '   END XDLSM\n':
@@ -637,11 +664,8 @@ def main():
     # Getting files
     mas, inst, cons = get_files()
 
-    # Defining constants
-    maxU = 2  # Maximum TP value (so far), starts at anisotropic (2).
-
     # Gathering information
-    atoms, dummys = get_atoms(mas)
+    atoms, dummys, maxU = get_atoms(mas)
 
     for number, line in enumerate(inst, start = 1):
         insts = get_instructions(line)
