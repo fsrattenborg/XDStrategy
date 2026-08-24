@@ -6,13 +6,6 @@
 # Remember to update the location of XDConstraints if this is to be used
 # directly through this script.
 # 
-# Latest changes:
-# - Added version number :D
-# - Moved path to XDConstraints for easy access
-# - Now updates TP values for individual atoms
-# - Now also reads symmetry restrictions on XYZ and U's if they are present
-#     in the original master file (e.g. from XDINI)
-# 
 # Todo (not a prioritised list):
 # - Set *model correctly (-1 (or -2?) for IAM)
 # - Incorporate refining κ on either core or valence
@@ -20,12 +13,18 @@
 # - Use standard sequence directly
 # - Make sure to always save the original master file
 # - Make SITESYM actually do something:
-#   - Geneate symmetry constraints on XYZ and U
+#   - Generate symmetry constraints on XYZ and U
 #   - Generate pseudosymm for MPs
 # - Make some functions and remove some indents:
 #   - Scalefactor handling
 # - Actually make the script decent (and borderline PEP8 compliant)
 # - Write some documentation/docstrings (perhaps)
+#
+# Changes:
+# - Now handles *model numbers correctly by reading max values from ATOM table
+# - Now updates TP values for individual atoms
+# - Now also reads symmetry restrictions on XYZ and U's if they are present
+#     in the original master file (e.g. from XDINI)
 # -----------------------------------------------------------------------------
 """
 
@@ -38,31 +37,28 @@ from glob import glob
 from pathlib import Path
 from collections import defaultdict
 
-__version__ = 'v0.0.3, 25.06.2026'
+__version__ = 'v0.0.4, 24.08.2026'
 
 standard = [
 '# Instructions for masterfiles',
 '# Masterfiles will be numbered automatically xd01.mas, ...',
-'# Specifications are made with [] and seperated by ; (eg. U3[Co;Br])'
+'# Specifications are made with [] and seperated by ; (eg. U3[Co;Br])',
 '# Exclude atoms with ! (eg. !H to exclude hydrogens)',
-'# In- and exclusions can be element or atom specific (eg. Co or Co(1))'
+'# In- and exclusions can be element or atom specific (eg. Co or Co(1))',
 '# Inclusion and exclusion are mutually exclusive (only use one!)',
-'# XYZ and U2-4 are ALWAYS tagged with [!H] (use HXYZ or HU1 instead)'
+'# XYZ and U2-4 are ALWAYS tagged with [!H] (use HXYZ or HU1 instead)',
 '# Possible instructions (WIP):',
 '# XYZ, HXYZ, U1, U2, U3, U4, HU1, M, D, Q, O, H, CC,',
 '# SCALE, SINTHL, SIGOBS, KAPPA, KAPPAP, CON',
-'SCALE'
-'SCALE XYZ U2 SINTHL[0.6;2.]'
-'SCALE KAPPA M'
-'SCALE KAPPA M D'
-'SCALE KAPPA M D Q'
-'SCALE KAPPA M D Q O'
-'SCALE KAPPA M D Q O H'
-'SCALE KAPPA M D Q O H XYZ U2'
+'SCALE',
+'SCALE CON XYZ U2 SINTHL[0.6;2.0]',
+'SCALE CON CC M',
+'SCALE CON CC M D',
+'SCALE CON CC M D Q',
+'SCALE CON CC M D Q O[!H]',
+'SCALE CON CC M D Q O[!H] H[!H]',
+'SCALE CON CC M D Q O[!H] H[!H] XYZ U2',
 ]
-
-# Path to XDConstraints script (by Lennard Krause)
-XDCon_path = r''
 
 ## Patterns
 atom_table_regex = re.compile(r'(?P<ATOM>[a-zA-Z\(\)0-9]+)\s+(?P<ATOM0>[a-zA-Z\(\)0-9]+)\s+(?P<AX1>[XYZxyz])\s+(?P<ATOM1>[a-zA-Z\(\)0-9]+)\s+(?P<ATOM2>[a-zA-Z\(\)0-9]+)\s+(?P<AX2>[XYZxyz])\s+(?P<RL>[RLrl])\s+(?P<TP>\d)\s+(?P<TBL>\d+)\s+(?P<KAP>\d+)\s+(?P<LMX>\d)\s+(?P<SITESYM>[0-9a-zA-Z_]*){0,1}(\s+(?P<CHEMCON>.*)\s*)*\n')
@@ -133,22 +129,24 @@ def get_files():
                 const_files_input = input('Input constraint file(s). Separate files with space: ')
                 if const_files_input:
                     files = [file for file in const_files_input.split(' ') if file]
-                    for file in files:
-                        try:
+
+                    try:
+                        for file in files:
                             with open(file, 'r'):
                                 const_files.append(file)
                                 print(f'{file} loaded.')
-                            break
-                        except FileNotFoundError: print(f'{file} not found.')
+                        break
+                    except FileNotFoundError: print(f'{file} not found.')
                 else:
                     print('Skipped loading constraints.')
                     break
 
-    elif Consts.upper() == 'W' and Path(XDCon_path).exists():
+
+    elif Consts.upper() == 'W' and Path(r'c:\DivScripts\LKScripts\XDConstraints.py').exists():
         existing_cons = glob(r'*.con') + glob(r'*.const')
         print(f'Running XDConstraints on {oMasName} to write constraints file.')
         XDCon = run(
-                ['python', XDCon_path],
+                ['python', r'c:\DivScripts\LKScripts\XDConstraints.py'],
                 input=oMasName,
                 text=True,
                 capture_output=True
@@ -164,16 +162,10 @@ def get_files():
         XDConOut = Path('XDConstraints.out')
         XDConOut.write_text(XDCon.stdout)
 
-    elif Consts.upper() == 'W' and XDCon_path:
-        print('Failed to locate and run XDConstraints.')
-        print('Please ensure path to XDConstraints are correctly set (XDCon_path).')
-        print('Alternatively run XDConstraints and add constraints manually.')
-        print('Continuing with no constraint files.')
-        const_files = []
-
     elif Consts.upper() == 'W':
-        print('Please set the path to XDConstraints (XDCon_path).')
-        print('Continuing with no constraint files.')
+        print('Failed to locate and run XDConstraints.')
+        print('Please ensure XDConstraints is in the same folder as XDStrategy (or path is given in script).')
+        print('Alternatively run XDConstraints and add constraints manually.')
         const_files = []
 
     else:
@@ -574,12 +566,11 @@ def write_masterfile(masterfile:list, atomdict:dict, dummyatoms:list, cons:list,
         otherins (dict): Dictionary of non-atom specific instructions
     """
     ## Prepping
-    instnr = f'{number:02}'
     scales, type_kappas = get_other_values(masterfile)
     cleanmas = clean_mas(masterfile)
 
     ## Writing
-    with open(f'xd{instnr}.mas', 'w') as new_master:
+    with open(f'xd{number:02}.mas', 'w') as new_master:
         for i, line in enumerate(cleanmas):
             # End of XDLSM -> Leave the rest of xd.mas untouched
             if line == '   END XDLSM\n':
