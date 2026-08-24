@@ -24,7 +24,7 @@
 # - Now handles *model numbers correctly by reading max values from ATOM table
 # - Now updates TP values for individual atoms
 # - Now also reads symmetry restrictions on XYZ and U's if they are present
-#     in the original master file (e.g. from XDINI)
+#     in the original master file (e.g. from new XDINI)
 # -----------------------------------------------------------------------------
 """
 
@@ -59,6 +59,9 @@ standard = [
 'SCALE CON CC M D Q O[!H] H[!H]',
 'SCALE CON CC M D Q O[!H] H[!H] XYZ U2',
 ]
+
+## Path to XDConstraints script (by Lennard Krause)
+XDConPath = r'c:\DivScripts\LKScripts\XDConstraints.py'
 
 ## Patterns
 atom_table_regex = re.compile(r'(?P<ATOM>[a-zA-Z\(\)0-9]+)\s+(?P<ATOM0>[a-zA-Z\(\)0-9]+)\s+(?P<AX1>[XYZxyz])\s+(?P<ATOM1>[a-zA-Z\(\)0-9]+)\s+(?P<ATOM2>[a-zA-Z\(\)0-9]+)\s+(?P<AX2>[XYZxyz])\s+(?P<RL>[RLrl])\s+(?P<TP>\d)\s+(?P<TBL>\d+)\s+(?P<KAP>\d+)\s+(?P<LMX>\d)\s+(?P<SITESYM>[0-9a-zA-Z_]*){0,1}(\s+(?P<CHEMCON>.*)\s*)*\n')
@@ -142,7 +145,7 @@ def get_files():
                     break
 
 
-    elif Consts.upper() == 'W' and Path(r'c:\DivScripts\LKScripts\XDConstraints.py').exists():
+    elif Consts.upper() == 'W' and Path(XDConPath).exists():
         existing_cons = glob(r'*.con') + glob(r'*.const')
         print(f'Running XDConstraints on {oMasName} to write constraints file.')
         XDCon = run(
