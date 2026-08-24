@@ -1,6 +1,7 @@
 # XDStrategy
-_Original by Lennard Krause_
-Generate successive xd.mas files based on instructions file.
+_Original by Lennard Krause._\
+\
+Generate successive xd.mas files based on list of instructions.\
 To be used with XDRefine (by Lennard Krause) or alike for sequential refinements in XD.
 
 ## Setup
@@ -10,7 +11,7 @@ To be used with XDRefine (by Lennard Krause) or alike for sequential refinements
 
 ## Input files
 - XD masterfile.
-- Instructions file (standard sequence writte by the script).
+- Instructions file (standard sequence written by the script).
 - Constraint files (optional).
     - Will be included using INCLUDE commands.
 
