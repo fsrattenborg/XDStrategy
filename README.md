@@ -3,9 +3,10 @@ Generate successive xd.mas files for refinement strategies.
 
 ## Setup
 - Set location of XDConstraints (if to be used).
+- Run script in folder with input files
 
 ## Input files
-- Input XD masterfile.
+- XD masterfile.
 - Instructions file (or written by the script).
 - Constraint files (written as INCLUDE commands) (optional).
 
