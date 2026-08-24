@@ -6,11 +6,9 @@
 # Remember to update the location of XDConstraints if this is to be used
 # directly through this script.
 # 
-# Todo (not a prioritised list):
+# To do (not a prioritised list):
 # - Set *model correctly (-1 (or -2?) for IAM)
 # - Incorporate refining κ on either core or valence
-# - Make standard sequence actually usable
-# - Use standard sequence directly
 # - Make sure to always save the original master file
 # - Make SITESYM actually do something:
 #   - Generate symmetry constraints on XYZ and U
@@ -19,12 +17,15 @@
 #   - Scalefactor handling
 # - Actually make the script decent (and borderline PEP8 compliant)
 # - Write some documentation/docstrings (perhaps)
+# - Remove some if statements to increase readability (and adaptability)
 #
 # Changes:
-# - Now handles *model numbers correctly by reading max values from ATOM table
-# - Now updates TP values for individual atoms
+# - Now able to use standard sequence directly.
+# - Standard sequence is now (borderline) usable.
+# - Now handles *model numbers correctly by reading max values from ATOM table.
+# - Now updates TP values for individual atoms.
 # - Now also reads symmetry restrictions on XYZ and U's if they are present
-#     in the original master file (e.g. from new XDINI)
+#     in the original master file (e.g. from new XDINI).
 # -----------------------------------------------------------------------------
 """
 
@@ -101,12 +102,12 @@ def get_files():
             with open('xd.inst', 'w') as TempFile:
                 for i in standard: TempFile.write(i + '\n')
             print('Instructions written to xd.inst.')
-            Cont = (input('Set up masterfiles with standard strategy? (Y/N) [N]: ') or 'N').upper()
-            if Cont == 'Y':
-                print('You forgot to add this feature.')
+            Cont = input('Set up masterfiles based on standard strategy? (Y/N) [N]: ') or 'N'
+            if Cont.upper() == 'Y':
+                print('Standard sequence will be used.')
                 inst_file = standard
             else:
-                print('Please restart program with the correct instructions file.')
+                print('Please restart program after editing the instructions file.')
                 sys.exit()
 
         else:
@@ -114,7 +115,7 @@ def get_files():
             sys.exit()
 
     # Pruning comments and empty lines in instructions:
-    inst_file = [line for line in inst_file if not (line.startswith('#') or re.match(r'\s*\n', line))]
+    inst_file = [re.sub(r'\n', '', line) for line in inst_file if not (line.startswith('#') or re.match(r'\s*\n|\s*\Z', line))]
 
     # Constraints
     Consts = input('Load (Y/N) or Write (W) constraints file(s)? [Y]: ') or 'Y'
@@ -149,7 +150,7 @@ def get_files():
         existing_cons = glob(r'*.con') + glob(r'*.const')
         print(f'Running XDConstraints on {oMasName} to write constraints file.')
         XDCon = run(
-                ['python', r'c:\DivScripts\LKScripts\XDConstraints.py'],
+                ['python', rf'{XDConPath}'],
                 input=oMasName,
                 text=True,
                 capture_output=True
@@ -167,18 +168,19 @@ def get_files():
 
     elif Consts.upper() == 'W':
         print('Failed to locate and run XDConstraints.')
-        print('Please ensure XDConstraints is in the same folder as XDStrategy (or path is given in script).')
+        print('Please ensure the path to XDConstraints is correct (XDConPath).')
         print('Alternatively run XDConstraints and add constraints manually.')
+        print('Program continues without constraints.')
         const_files = []
 
     else:
         const_files = []
 
     # Checking loaded files
-    print('\nFiles loaded:\nMaster:')
-    print(''.join(oMas[:4]), end='')
-    print('\nInst:\n', *inst_file, sep = '')
-    print(f'{f'\nCons:\n[{', '.join(set(const_files))}]' if const_files else '\nNo constraints loaded.'}\n', sep = '')
+    print('\nFiles loaded:\nMasterfile:')
+    print(''.join(oMas[3:4]), end='')
+    print('\nInstructions:', *inst_file, sep = '\n')
+    print(f'{f'\nConstraints:\n[{', '.join(set(const_files))}]' if const_files else '\nNo constraints loaded.'}\n', sep = '')
 
     # Ensuring original masterfile is saved
     if not os.path.exists('xd00.mas'):
@@ -329,7 +331,6 @@ def get_atoms(masterfile):
 ## Key table (get MP pseudo symmetry)
         if key_table_regex.search(line):
             keys = key_table_regex.match(line).groupdict()
-            print(keys)
             xyz = keys.get('XYZ')
             atomdict[keys['ATOM']].set_xyz(xyz)
 
@@ -398,7 +399,6 @@ def get_other_values(masterfile:list):
     return scales, type_kappas
 
 def instruct_atoms(inst_line, atomdict, maxU = 0):
-
     other_ins = {}
     # Only scale refinement
     if all([inst in ['SCALE', 'CON', 'CC'] for inst in inst_line]):
@@ -427,7 +427,6 @@ def instruct_atoms(inst_line, atomdict, maxU = 0):
         )
         for ins, v in inst_line.items()
     }
-    print(inst_line)
 
     # Handling element specific instructions
     for atom in atomdict.values():
