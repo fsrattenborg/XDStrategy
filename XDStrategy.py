@@ -5,6 +5,12 @@
 # Notes:
 # Remember to update the location of XDConstraints if this is to be used
 # directly through this script.
+#
+# Latest changes:
+# - Version is now v0.0.5, 29.10.2026 :o
+# - The second monopole (M2) can now be used as an instruction.
+#   - Needs to be setup in the initial .mas (and .inp) file, as the other MPs.
+# - EXTCN is now a usable instruction. Enables isotropic extinction refinement.
 # 
 # To do (not a prioritised list):
 # - Set *model correctly (-1 (or -2?) for IAM)
@@ -17,15 +23,8 @@
 #   - Scalefactor handling
 # - Actually make the script decent (and borderline PEP8 compliant)
 # - Write some documentation/docstrings (perhaps)
-# - Remove some if statements to increase readability (and adaptability)
-#
-# Changes:
-# - Now able to use standard sequence directly.
-# - Standard sequence is now (borderline) usable.
-# - Now handles *model numbers correctly by reading max values from ATOM table.
-# - Now updates TP values for individual atoms.
-# - Now also reads symmetry restrictions on XYZ and U's if they are present
-#     in the original master file (e.g. from new XDINI).
+# - Remove some if-statements to increase readability (and adaptability)
+# - Split instruct_atoms into two functions: split ins/other_ins and instruct
 # -----------------------------------------------------------------------------
 """
 
@@ -38,7 +37,7 @@ from glob import glob
 from pathlib import Path
 from collections import defaultdict
 
-__version__ = 'v0.0.4, 24.08.2026'
+__version__ = 'v0.0.5, 29.10.2026'  # Remember to update
 
 standard = [
 '# Instructions for masterfiles',
@@ -48,9 +47,10 @@ standard = [
 '# In- and exclusions can be element or atom specific (eg. Co or Co(1))',
 '# Inclusion and exclusion are mutually exclusive (only use one!)',
 '# XYZ and U2-4 are ALWAYS tagged with [!H] (use HXYZ or HU1 instead)',
+'# EXTCN enables isotropic extinction refinement.',
 '# Possible instructions (WIP):',
-'# XYZ, HXYZ, U1, U2, U3, U4, HU1, M, D, Q, O, H, CC,',
-'# SCALE, SINTHL, SIGOBS, KAPPA, KAPPAP, CON',
+'# XYZ, HXYZ, U1, U2, U3, U4, HU1, M, M2, D, Q, O, H',
+'# CC, SCALE, SINTHL, SIGOBS, KAPPA, KAPPAP, CON, EXTCN',
 'SCALE',
 'SCALE CON XYZ U2 SINTHL[0.6;2.0]',
 'SCALE CON CC M',
@@ -65,13 +65,14 @@ standard = [
 XDConPath = r'c:\DivScripts\LKScripts\XDConstraints.py'
 
 ## Patterns
-atom_table_regex = re.compile(r'(?P<ATOM>[a-zA-Z\(\)0-9]+)\s+(?P<ATOM0>[a-zA-Z\(\)0-9]+)\s+(?P<AX1>[XYZxyz])\s+(?P<ATOM1>[a-zA-Z\(\)0-9]+)\s+(?P<ATOM2>[a-zA-Z\(\)0-9]+)\s+(?P<AX2>[XYZxyz])\s+(?P<RL>[RLrl])\s+(?P<TP>\d)\s+(?P<TBL>\d+)\s+(?P<KAP>\d+)\s+(?P<LMX>\d)\s+(?P<SITESYM>[0-9a-zA-Z_]*){0,1}(\s+(?P<CHEMCON>.*)\s*)*\n')
-key_table_regex  = re.compile(r'(?P<ATOM>[a-zA-Z\(\)0-9]+)\s+(?P<XYZ>[01]{3})\s+(?P<U2>[01]{6})\s+(?P<U3>[01]{10})\s+(?P<U4>[01]{15})\s+(?P<M>[01]{2})\s+(?P<D>[01]{3})\s+(?P<Q>[01]{5})\s+(?P<O>[01]{7})\s+(?P<H>[01]{9}).*\n')
+atom_table_regex = re.compile(r'(?P<ATOM>[a-zA-Z\(\)0-9]+)\s+(?P<ATOM0>[a-zA-Z\(\)0-9]+)\s+(?P<AX1>[XYZxyz])\s+(?P<ATOM1>[a-zA-Z\(\)0-9]+)\s+(?P<ATOM2>[a-zA-Z\(\)0-9]+)\s+(?P<AX2>[XYZxyz])\s+(?P<RL>[RLrl])\s+(?P<TP>\d)\s+(?P<TBL>\d+)\s+(?P<KAP>\d+)\s+(?P<LMX>\d)\s{1,8}(?P<SITESYM>[0-9a-zA-Z_.-]*){0,1}\s*(?P<CHEMCON>[a-zA-Z\(\)0-9]*).*\n')
+key_table_regex  = re.compile(r'(?P<ATOM>[a-zA-Z\(\)0-9]+)\s+(?P<XYZ>[01]{3})\s+(?P<U2>[01]{6})\s+(?P<U3>[01]{10})\s+(?P<U4>[01]{15})\s+(?P<M>[01]{1})(?P<M2>[01]{1})\s+(?P<D>[01]{3})\s+(?P<Q>[01]{5})\s+(?P<O>[01]{7})\s+(?P<H>[01]{9}).*\n')
 scat_table_regex = re.compile(r'(?P<SCAT>[a-zA-Z\(\)0-9\+\-]+)\s+(?P<CORE>\w+)\s+(?P<SPHV>\w+)\s+(?P<DEFV>\w+)\s+(?P<S1>[0-9\-]+)\s+(?P<S2>[0-9\-]+)\s+(?P<S3>[0-9\-]+)\s+(?P<S4>[0-9\-]+)\s+(?P<P2>[0-9\-]+)\s+(?P<P3>[0-9\-]+)\s+(?P<P4>[0-9\-]+)\s+(?P<D3>[0-9\-]+)\s+(?P<D4>[0-9\-]+)\s+(?P<F4>[0-9\-]+)\s+(?P<S5>[0-9\-]+)\s+(?P<P5>[0-9\-]+)\s+(?P<S6>[0-9\-]+)\s+(?P<P6>[0-9\-]+)\s+(?P<D5>[0-9\-]+)\s+(?P<S7>[0-9\-]+)\s+(?P<D6>[0-9\-]+)\s+(?P<F5>[0-9\-]+)\s+(?P<DELF>[0-9\.\-]+)\s+(?P<DELFf>[0-9\.\-]+)\s+(?P<NSCTL>[0-9\.\-]+)\s*')
 kappa_regex      = re.compile(r'KAPPA\s+[01]{6}\s*')
 four_regex       = re.compile(r'!{0,1}FOUR\s+fmod1\s+-?\d\s+\d\s+\d\s+\d\s+fmod2\s+-?\d\s+\d\s+\d\s+\d')
 model_regex      = re.compile(r'SELECT\s+\**model\s+4\s+[23]\s+1\s+0\s+based_on\s+F\^2\s+test\s+verbose\s+1\s+')
 skip_regex       = re.compile(r'!{0,1}SKIP\s+[\*]{0,1}obs\s+[d\d.]+\s+[d\d.]+\s+[\*]{0,1}sigobs\s+[d\d.]+\s+[d\d.]+\s+[\*]{0,1}sinthl\s+[d\d.]+\s+[d\d.]+\s+')
+extcn_regex      = re.compile(r'!{0,1}EXTCN\s+[\*]{0,1}iso\s+[\*]{0,1}aniso\s+[\*]{0,1}type_1\s+[\*]{0,1}type_2\s+[\*]{0,1}type_3\s+[\*]{0,1}distr_g\s+[\*]{0,1}distr_1\s+[\*]{0,1}msc_0\s+[\*]{0,1}msc_1\s+')
 vibcon_regex     = re.compile(r'CON(\s+[\d.-]+\s+[U\d/]+)+\s+=\s+0\s+.*')
 reset_regex      = re.compile(r'RESET\s+BOND(\s+[a-zA-Z\(\)0-9]+){2}\s+[\d.]+\s+')
 cycles_regex     = re.compile(r'SELECT\s+cycle\s+[0-9\-]+\s+dampk\s+[0-9\.]+\s+cmin\s+[0-9\.]+\s+cmax\s+[0-9\.]+\s+eigcut\s+[d0-9\.\-]+\s+\*?convcrit\s+[d0-9\.\-]+\s+')
@@ -129,21 +130,17 @@ def get_files():
             const_files = temp_const_files
 
         else:
-            while True:
-                const_files_input = input('Input constraint file(s). Separate files with space: ')
-                if const_files_input:
-                    files = [file for file in const_files_input.split(' ') if file]
-
-                    try:
-                        for file in files:
-                            with open(file, 'r'):
-                                const_files.append(file)
-                                print(f'{file} loaded.')
-                        break
-                    except FileNotFoundError: print(f'{file} not found.')
-                else:
-                    print('Skipped loading constraints.')
-                    break
+            const_files_input = input('Input constraint file(s). Separate files with space: ')
+            if const_files_input:
+                files = [file for file in const_files_input.split(' ') if file]
+                for file in files:
+                    if os.path.exists(file):
+                        const_files.append(file)
+                        print(f'{file} loaded.')
+                    else:
+                        print(f'{file} not found.')
+            else:
+                print('Skipped loading constraints.')
 
 
     elif Consts.upper() == 'W' and Path(XDConPath).exists():
@@ -191,9 +188,9 @@ def get_files():
     return oMas, inst_file, list(set(const_files))
 
 class Atom():
-    def __init__(self, atom, atom0, ax1, atom1, atom2, ax2, rl, tp, tbl, kap, lmx, sitesym = ' ', chemcon = ' '):
+    def __init__(self, atom, atom0, ax1, atom1, atom2, ax2, rl, tp, tbl, kap, lmx, sitesym, chemcon):
         self.atom = atom[1]
-        self.coordsys = f'{atom0[1]:10}{ax1[1]:3}{atom1[1]:9}{atom2[1]:9}{ax2[1]:4}{rl[1]:4}'
+        self.coordsys = f'{atom0[1]:<9}{ax1[1]:^3} {atom1[1]:<9}{atom2[1]:<8}{ax2[1]:^3} {rl[1]:^3}'
         self.tp = tp[1]
         self.tbl = tbl[1]
         self.kap = kap[1]
@@ -204,8 +201,8 @@ class Atom():
         self.element = None
 
     def atom_table(self):
-        chemcon = self.chemcon if 'CC' in self.instruction else ' '
-        return f'{self.atom:9}{self.coordsys:39}{self.tp:3}{self.tbl:4}{self.kap:4}{self.lmx:3}{self.sitesym:6}{chemcon:5}'
+        chemcon = self.chemcon if 'CC' in self.instruction else ''
+        return f'{self.atom:<9}{self.coordsys} {self.tp:>2} {self.tbl:^3} {self.kap:^3} {self.lmx:^3} {self.sitesym:<7}  {chemcon:<7}'
 
     def key_table(self):
         xyz = '000'
@@ -214,11 +211,12 @@ class Atom():
               'U4': '000000000000000'
               }
 
-        MMs = {'M': '00',
-               'D': '000',
-               'Q': '00000',
-               'O': '0000000',
-               'H': '000000000'
+        MMs = {'M' : '0',
+               'M2': '0',
+               'D' : '000',
+               'Q' : '00000',
+               'O' : '0000000',
+               'H' : '000000000'
                }
 
         # Handle hydrogen specific instructions correctly
@@ -234,18 +232,20 @@ class Atom():
         if 'U4' in instructions: Us['U4'] = self.Ucons['U4']
 
         # Multipoles
-        if 'M' in instructions: MMs['M'] = self.MPs['M']
-        if 'D' in instructions: MMs['D'] = self.MPs['D']
-        if 'Q' in instructions: MMs['Q'] = self.MPs['Q']
-        if 'O' in instructions: MMs['O'] = self.MPs['O']
-        if 'H' in instructions: MMs['H'] = self.MPs['H']
+        if 'M'  in instructions: MMs['M']  = self.MPs['M']
+        if 'M2' in instructions: MMs['M2'] = self.MPs['M2']
+        if 'D'  in instructions: MMs['D']  = self.MPs['D']
+        if 'Q'  in instructions: MMs['Q']  = self.MPs['Q']
+        if 'O'  in instructions: MMs['O']  = self.MPs['O']
+        if 'H'  in instructions: MMs['H']  = self.MPs['H']
 
-        Multipoles = ' '.join(str(mp) for mp in MMs.values())
+        Monopoles = ''.join(str(mono) for mono in [MMs['M'], MMs['M2']])
+        Multipoles = ' '.join(str(mp) for mp in list(MMs.values())[2:])
         U = ' '.join(str(Ux) for Ux in Us.values())
         self.instruction = []
-        return f'{self.atom:8}{xyz} {U} {Multipoles}'
+        return f'{self.atom:8}{xyz} {U} {Monopoles} {Multipoles}'
 
-    def set_pseudosymm(self, MPs):
+    def set_mpsymm(self, MPs):
         self.MPs = MPs
 
     def set_xyz(self, xyz):
@@ -258,6 +258,7 @@ class Atom():
         self.tp = str(max(TP, int(self.tp)))
 
 def clean_mas(masterfile):
+    print('I cleaned the mas file')
     masterfile = deepcopy(masterfile)
     starters = ['ATOM     ATOM0    AX1', 'KEY']
     endings =  ['END ATOM', 'EXTCN ']
@@ -280,6 +281,12 @@ def clean_mas(masterfile):
             new_master.append(re.sub(r'[01]+', lambda m: '0' * len(m.group()), line))
             continue
 
+        if re.match(r'EXTCN\s+[01]{7}', line):
+            new_master.append(re.sub(r'EXTCN\s+[01]{7}',
+                                      'EXTCN   0000000', line))
+            skip = False
+            continue
+
         if any(line.startswith(marker) for marker in starters):
             new_master.append(line)
             skip = True
@@ -292,9 +299,10 @@ def clean_mas(masterfile):
 
         if not skip:
             new_master.append(line)
-
-    with open('clean.mas', 'w') as cleanmas:
-        cleanmas.writelines(new_master)
+    
+    # For debugging/testing
+    # with open('clean.mas', 'w') as cleanmas:
+    #     cleanmas.writelines(new_master)
 
     return new_master
 
@@ -339,8 +347,8 @@ def get_atoms(masterfile):
             atomdict[keys['ATOM']].set_U_cons(Ucons)
 
             MPs = {}
-            for mp in ['M', 'D', 'Q', 'O', 'H']: MPs[mp] = keys.get(mp)
-            atomdict[keys['ATOM']].set_pseudosymm(MPs)
+            for mp in ['M', 'M2', 'D', 'Q', 'O', 'H']: MPs[mp] = keys.get(mp)
+            atomdict[keys['ATOM']].set_mpsymm(MPs)
 
         elif line == 'END KEY\n':
             break
@@ -398,23 +406,26 @@ def get_other_values(masterfile:list):
 
     return scales, type_kappas
 
-def instruct_atoms(inst_line, atomdict, maxU = 0):
+def instruct_atoms(inst_line, atomdict, maxU = 0, extcn = False):
     other_ins = {}
     # Only scale refinement
     if all([inst in ['SCALE', 'CON', 'CC'] for inst in inst_line]):
         scales = {'SCALE': inst_line['SCALE'] or ['A']}
         if 'CON' in inst_line:
             scales['CON'] = inst_line['CON'] or []
-        return True, scales, maxU
+        return True, scales, maxU, extcn
     
     # Handle non-atom specific entries
-    for ins in [key for key in inst_line.keys() if key in ['SCALE', 'SIGOBS', 'SINTHL', 'KAPPA', 'KAPPAP', 'CON']]:
+    for ins in [key for key in inst_line.keys() if key in ['SCALE', 'SIGOBS', 'SINTHL', 'KAPPA', 'KAPPAP', 'CON', 'EXTCN']]:
         if ins in ['SCALE', 'KAPPA', 'KAPPAP']:
             inst_line[ins] = inst_line[ins] or ['A']
         other_ins[ins] = inst_line.pop(ins)
 
     maxU_test = [U for U in inst_line.keys() if re.match(r'H?U\d', U)]
     maxU = int(max(maxU_test)[-1]) if (maxU_test and int(max(maxU_test)[-1]) > maxU) else maxU
+
+    # Checking if extinction is refined/have been refined.
+    if 'EXTCN' in other_ins: extcn = True
 
     # Prepare element specific instructions
     inst_line = {
@@ -443,7 +454,7 @@ def instruct_atoms(inst_line, atomdict, maxU = 0):
                 # Ensure correct TP-value in ATOM table
                 if re.match(r'U[2-4]', ins): atom.update_TP(int(ins[1:]))
 
-    return False, other_ins, maxU
+    return False, other_ins, maxU, extcn
 
 def write_kappa_entry(type_kappas, otherins):
     """
@@ -510,14 +521,14 @@ def generate_con_includes(cons, otherins):
 
     # --- CASE 2: CON not present → no con files included ---
     if 'CON' not in otherins:
-        return [f'!INCLUDE {c}' for c in cons]
+        return [f'!INCLUDE  {c}' for c in cons]
 
     # Now CON is present
     con_values = otherins['CON']
 
     # If CON present but empty list -> include everything
     if not con_values:
-        return [f'INCLUDE {c}' for c in cons]
+        return [f'INCLUDE  {c}' for c in cons]
 
     # Collect explicit includes/excludes
     includes = set()
@@ -537,9 +548,9 @@ def generate_con_includes(cons, otherins):
         # Ignore any excludes for this rule — positive list overrides
         for base, full in con_map.items():
             if base in includes:
-                result.append(f'INCLUDE {full}')
+                result.append(f'INCLUDE  {full}')
             else:
-                result.append(f'!INCLUDE {full}')
+                result.append(f'!INCLUDE  {full}')
 
         return sorted(result, key = lambda s: s.startswith('!'))
 
@@ -547,13 +558,14 @@ def generate_con_includes(cons, otherins):
     # Include everything *except* excluded ones
     for base, full in con_map.items():
         if base in excludes:
-            result.append(f'!INCLUDE {full}')
+            result.append(f'!INCLUDE  {full}')
         else:
-            result.append(f'INCLUDE {full}')
+            result.append(f'INCLUDE  {full}')
 
     return sorted(result, key = lambda s: s.startswith('!'))
 
-def write_masterfile(masterfile:list, atomdict:dict, dummyatoms:list, cons:list, number:int, maxU:int, only_scale:bool = False, otherins:dict = {}):
+def write_masterfile(masterfile:list, atomdict:dict, dummyatoms:list, cons:list, number:int, 
+                     maxU:int, only_scale:bool = False, otherins:dict = {}, EXT:bool = False):
     """
     Docstring for write_masterfile
     
@@ -566,6 +578,7 @@ def write_masterfile(masterfile:list, atomdict:dict, dummyatoms:list, cons:list,
         maxU (int): Max U-parameter so far
         only_scale (bool): Only refining scalefactors
         otherins (dict): Dictionary of non-atom specific instructions
+        EXT (bool): Extinction refinement check
     """
     ## Prepping
     scales, type_kappas = get_other_values(masterfile)
@@ -588,7 +601,8 @@ def write_masterfile(masterfile:list, atomdict:dict, dummyatoms:list, cons:list,
 
             # Model (always uses lmx = 4)
             elif re.match(r'SELECT\s+\*?model\s+-?\d\s+-?\d\s+\d\s+\d', line):
-                line = re.sub(r'\*?model\s+-?\d\s+-?\d\s+\d\s+\d', f'*model 4 {maxU} 1 0', line)
+                extcn = 0 if not EXT else 1  # Setting extinction correctly in *model
+                line = re.sub(r'\*?model\s+-?\d\s+-?\d\s+\d\s+\d', f'*model 4 {maxU} 1 {extcn}', line)
 
             # FOUR line (always uses lmx = 4/-1 (fmod1/fmod2)) and constraints if present
             elif re.match(four_regex, line):
@@ -648,6 +662,13 @@ def write_masterfile(masterfile:list, atomdict:dict, dummyatoms:list, cons:list,
 
                 continue
 
+            elif re.match(extcn_regex, line) and 'EXTCN' in otherins:
+                line = re.sub(r'!{0,1}EXTCN\s+\*{0,1}iso\s+\*{0,1}aniso', 'EXTCN    *iso aniso', line)
+                # line = 'EXTCN    *iso aniso *type_1 type_2 type_3 distr_g *distr_l msc_0  msc_1\n'
+
+            elif re.match(r'EXTCN\s+[0,1]{7}', line) and 'EXTCN' in otherins:
+                line = 'EXTCN   1000000\n'
+
             new_master.write(line)
 
 def main():
@@ -659,14 +680,15 @@ def main():
 
     # Gathering information
     atoms, dummys, maxU = get_atoms(mas)
+    extcn = False
 
     for number, line in enumerate(inst, start = 1):
         insts = get_instructions(line)
-        onlyscale, other_ins, maxU = instruct_atoms(insts, atoms, maxU)
-        write_masterfile(mas, atoms, dummys, cons, number, maxU, onlyscale, other_ins)
+        onlyscale, other_ins, maxU, extcn = instruct_atoms(insts, atoms, maxU, extcn)
+        write_masterfile(mas, atoms, dummys, cons, number, maxU, onlyscale, other_ins, extcn)
 
     # Cleaning up
-    os.remove(r'clean.mas')
+    # os.remove(r'clean.mas')
 
 if __name__ == '__main__':
     main()
